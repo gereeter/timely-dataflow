@@ -48,39 +48,40 @@ pub trait Map<S: Scope, D: Data> {
     /// });
     /// ```
     fn flat_map<I: IntoIterator, L: Fn(D)->I+'static>(&self, logic: L) -> Stream<S, I::Item> where I::Item: Data;
+    /// Consumes each message sent down the stream and yields a new, transformed message at the same time.
+    ///
+    /// This method is meant mostly for internal use.
+    ///
+    /// #Examples
+    /// ```
+    /// use timely::dataflow::operators::{ToStream, Map, Inspect};
+    ///
+    /// timely::example(|scope| {
+    ///     (0..10).to_stream(scope)
+    ///            .map(|x| x + 1)
+    ///            .inspect(|x| println!("seen: {:?}", x));
+    /// });
+    /// ```
+    fn map_batch<D2: Data, L: Fn(Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2>;
 }
 
 impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
     fn map<D2: Data, L: Fn(D)->D2+'static>(&self, logic: L) -> Stream<S, D2> {
-        let (targets, registrar) = Tee::<S::Timestamp,D2>::new();
-        self.add_pusher(MapPusher::new(move |(time, mut data): (_, Content<_>)| {
+        self.map_batch(move |mut data| {
             let mut mapped: Vec<_> = data.replace_with(Vec::new())
                                          .into_iter()
                                          .map(&logic)
                                          .collect();
-            (time, Content::from_typed(&mut mapped))
-        }, targets));
-
-        Stream::new(
-            *self.name(),
-            registrar,
-            self.scope()
-        )
+            Content::from_typed(&mut mapped)
+        })
     }
     fn map_in_place<L: Fn(&mut D)+'static>(&self, logic: L) -> Stream<S, D> {
-        let (targets, registrar) = Tee::<S::Timestamp,D>::new();
-        self.add_pusher(MapPusher::new(move |(time, mut data): (_, Content<_>)| {
+        self.map_batch(move |mut data| {
             for datum in data.iter_mut() {
                 logic(datum);
             }
-            (time, data)
-        }, targets));
-
-        Stream::new(
-            *self.name(),
-            registrar,
-            self.scope()
-        )
+            data
+        })
     }
     // TODO : This would be more robust if it captured an iterator and then pulled an appropriate
     // TODO : number of elements from the iterator. This would allow iterators that produce many
@@ -99,4 +100,17 @@ impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
     //         }
     //     })
     // }
+    fn map_batch<D2: Data, L: Fn(Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2> {
+        let (targets, registrar) = Tee::<S::Timestamp,D2>::new();
+        self.add_pusher(MapPusher::new(move |(time, data)| {
+            let data = logic(data);
+            (time, data)
+        }, targets));
+
+        Stream::new(
+            *self.name(),
+            registrar,
+            self.scope()
+        )
+    }
 }
