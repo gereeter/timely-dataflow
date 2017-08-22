@@ -6,7 +6,7 @@
 
 use progress::nested::subgraph::{Source, Target};
 
-use Push;
+use timely_communication::{Push, PushRef};
 use dataflow::Scope;
 use dataflow::channels::pushers::tee::TeeHelper;
 use dataflow::channels::Content;
@@ -47,6 +47,10 @@ impl<S: Scope, D> Stream<S, D> {
     /// Manually add a pusher that will listen for the data of this stream.
     pub fn add_pusher<P: Push<(S::Timestamp, Content<D>)>+'static>(&self, pusher: P) {
         self.ports.add_pusher(pusher);
+    }
+    /// Manually add a by-reference pusher that will listen for the data of this stream.
+    pub fn add_ref_pusher<P: PushRef<(S::Timestamp, Content<D>)>+'static>(&self, pusher: P) {
+        self.ports.add_ref_pusher(pusher);
     }
     /// Allocates a `Stream` from a supplied `Source` name and rendezvous point.
     pub fn new(source: Source, output: TeeHelper<S::Timestamp, D>, scope: S) -> Self {

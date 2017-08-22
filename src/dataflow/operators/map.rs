@@ -22,6 +22,19 @@ pub trait Map<S: Scope, D: Data> {
     /// });
     /// ```
     fn map<D2: Data, L: Fn(D)->D2+'static>(&self, logic: L) -> Stream<S, D2>;
+    /// Looks at each element of the stream by reference and yields a new element.
+    ///
+    /// #Examples
+    /// ```
+    /// use timely::dataflow::operators::{ToStream, Map, Inspect};
+    ///
+    /// timely::example(|scope| {
+    ///     (0..10).to_stream(scope)
+    ///            .map_ref(|&x| x + 1)
+    ///            .inspect(|x| println!("seen: {:?}", x));
+    /// });
+    /// ```
+    fn map_ref<D2: Data, L: Fn(&D)->D2+'static>(&self, logic: L) -> Stream<S, D2>;
     /// Updates each element of the stream and yields the element, re-using memory where possible.
     ///
     /// #Examples
@@ -58,11 +71,37 @@ pub trait Map<S: Scope, D: Data> {
     ///
     /// timely::example(|scope| {
     ///     (0..10).to_stream(scope)
-    ///            .map(|x| x + 1)
+    ///            .map_batch(|mut data| {
+    ///                for datum in &mut data {
+    ///                    *datum += 1;
+    ///                }
+    ///                data
+    ///            })
     ///            .inspect(|x| println!("seen: {:?}", x));
     /// });
     /// ```
     fn map_batch<D2: Data, L: Fn(Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2>;
+    /// Looks at each message sent down the stream by reference and yields a new, transformed message at the same time.
+    ///
+    /// This method is meant mostly for internal use.
+    ///
+    /// #Examples
+    /// ```
+    /// use timely::dataflow::operators::{ToStream, Map, Inspect};
+    /// use timely::dataflow::channels::Content;
+    ///
+    /// timely::example(|scope| {
+    ///     (0..10).to_stream(scope)
+    ///            .map_batch_ref(|data| {
+    ///                let mut mapped = data.iter()
+    ///                                     .map(|&x| x + 1)
+    ///                                     .collect();
+    ///                Content::from_typed(&mut mapped)
+    ///            })
+    ///            .inspect(|x| println!("seen: {:?}", x));
+    /// });
+    /// ```
+    fn map_batch_ref<D2: Data, L: Fn(&Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2>;
 }
 
 impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
@@ -70,6 +109,14 @@ impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
         self.map_batch(move |mut data| {
             let mut mapped: Vec<_> = data.replace_with(Vec::new())
                                          .into_iter()
+                                         .map(&logic)
+                                         .collect();
+            Content::from_typed(&mut mapped)
+        })
+    }
+    fn map_ref<D2: Data, L: Fn(&D)->D2+'static>(&self, logic: L) -> Stream<S, D2> {
+        self.map_batch_ref(move |data| {
+            let mut mapped: Vec<_> = data.iter()
                                          .map(&logic)
                                          .collect();
             Content::from_typed(&mut mapped)
@@ -102,9 +149,18 @@ impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
     // }
     fn map_batch<D2: Data, L: Fn(Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2> {
         let (targets, registrar) = Tee::<S::Timestamp,D2>::new();
-        self.add_pusher(MapPusher::new(move |(time, data)| {
-            let data = logic(data);
-            (time, data)
+        self.add_pusher(MapPusher::new(move |(time, data)| (time, logic(data)), targets));
+
+        Stream::new(
+            *self.name(),
+            registrar,
+            self.scope()
+        )
+    }
+    fn map_batch_ref<D2: Data, L: Fn(&Content<D>)->Content<D2>+'static>(&self, logic: L) -> Stream<S, D2> {
+        let (targets, registrar) = Tee::<S::Timestamp,D2>::new();
+        self.add_ref_pusher(MapPusher::new(move |&(ref time, ref data): &(S::Timestamp, _)| {
+            (time.clone(), logic(data))
         }, targets));
 
         Stream::new(

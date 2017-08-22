@@ -125,6 +125,12 @@ pub trait Push<T> {
     fn done(&mut self) { self.push(&mut None); }
 }
 
+/// Pushing references to elements of type `T`.
+pub trait PushRef<T> {
+    /// Pushes `element`. If `Non` is pushed, this signals a flush.
+    fn push_ref(&mut self, element: Option<&T>);
+}
+
 impl<T, P: ?Sized + Push<T>> Push<T> for Box<P> {
     fn push(&mut self, element: &mut Option<T>) { (**self).push(element) }
 }
