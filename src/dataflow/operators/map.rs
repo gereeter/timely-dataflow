@@ -3,6 +3,8 @@
 use Data;
 use dataflow::{Stream, Scope};
 use dataflow::channels::pact::Pipeline;
+use dataflow::channels::Content;
+use dataflow::channels::pushers::{MapPusher, Tee};
 use dataflow::operators::generic::unary::Unary;
 
 /// Extension trait for `Stream`.
@@ -50,19 +52,35 @@ pub trait Map<S: Scope, D: Data> {
 
 impl<S: Scope, D: Data> Map<S, D> for Stream<S, D> {
     fn map<D2: Data, L: Fn(D)->D2+'static>(&self, logic: L) -> Stream<S, D2> {
-        self.unary_stream(Pipeline, "Map", move |input, output| {
-            input.for_each(|time, data| { 
-                output.session(&time).give_iterator(data.drain(..).map(|x| logic(x)));
-            });
-        })
+        let (targets, registrar) = Tee::<S::Timestamp,D2>::new();
+        self.add_pusher(MapPusher::new(move |(time, mut data): (_, Content<_>)| {
+            let mut mapped: Vec<_> = data.replace_with(Vec::new())
+                                         .into_iter()
+                                         .map(&logic)
+                                         .collect();
+            (time, Content::from_typed(&mut mapped))
+        }, targets));
+
+        Stream::new(
+            *self.name(),
+            registrar,
+            self.scope()
+        )
     }
     fn map_in_place<L: Fn(&mut D)+'static>(&self, logic: L) -> Stream<S, D> {
-        self.unary_stream(Pipeline, "MapInPlace", move |input, output| {
-            input.for_each(|time, data| {
-                for datum in data.iter_mut() { logic(datum); }
-                output.session(&time).give_content(data);
-            })
-        })
+        let (targets, registrar) = Tee::<S::Timestamp,D>::new();
+        self.add_pusher(MapPusher::new(move |(time, mut data): (_, Content<_>)| {
+            for datum in data.iter_mut() {
+                logic(datum);
+            }
+            (time, data)
+        }, targets));
+
+        Stream::new(
+            *self.name(),
+            registrar,
+            self.scope()
+        )
     }
     // TODO : This would be more robust if it captured an iterator and then pulled an appropriate
     // TODO : number of elements from the iterator. This would allow iterators that produce many

@@ -44,6 +44,10 @@ impl<S: Scope, D> Stream<S, D> {
         self.scope.add_edge(self.name, target);
         self.ports.add_pusher(pusher);
     }
+    /// Manually add a pusher that will listen for the data of this stream.
+    pub fn add_pusher<P: Push<(S::Timestamp, Content<D>)>+'static>(&self, pusher: P) {
+        self.ports.add_pusher(pusher);
+    }
     /// Allocates a `Stream` from a supplied `Source` name and rendezvous point.
     pub fn new(source: Source, output: TeeHelper<S::Timestamp, D>, scope: S) -> Self {
         Stream { name: source, ports: output, scope: scope }
